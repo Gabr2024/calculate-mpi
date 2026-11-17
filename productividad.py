@@ -1,16 +1,25 @@
 """
-Calculadora de Productividad para Map Editors
----------------------------------------------
+Calculadora MPI para Map Editors
+--------------------------------
+Calcula el MPI diario (el dato que se comparte en la junta MDI) a partir de:
+  - el workflow
+  - las tareas hechas
+  - las horas productivas
+
 Cada workflow tiene su propia meta por hora productiva:
   - Baseline (mínimo)  -> tabla WORKFLOWS, primer número
   - Efficiency target  -> tabla WORKFLOWS, segundo número
 
-Productividad      = Tareas ÷ (Horas productivas × Baseline) × 100
-Valor para captura = Tareas ÷ (Horas productivas × Baseline)
+Métrica actual = Tareas ÷ Horas productivas
+MPI            = Métrica actual ÷ Métrica planeada (Baseline)
+  1 = en la métrica planeada · >1 = arriba · <1 = debajo
+
+ACTUALIZACIÓN CADA Q: cuando cambien las métricas, edita PERIODO_METAS
+y la tabla WORKFLOWS. Es lo único que hay que tocar.
 
 Uso:
     python productividad.py
-    python productividad.py "Hice 142 tareas en 9 horas, comí 45 min"
+    python productividad.py "95 tareas en 6 horas"
 
 Solo usa la biblioteca estándar de Python (3.8 o más nuevo). No hay que instalar nada.
 """
@@ -18,7 +27,12 @@ Solo usa la biblioteca estándar de Python (3.8 o más nuevo). No hay que instal
 import re
 import sys
 
-# Metas por hora productiva: "Workflow": (Q1-26 BASELINE, Efficiency target)
+# ===================== ACTUALIZAR CADA Q =====================
+# Periodo de las métricas cargadas. Se muestra en la página para que
+# todos sepan con qué metas se está calculando.
+PERIODO_METAS = "Q1-26"
+
+# Metas por hora productiva: "Workflow": (Baseline, Efficiency target)
 # Para cambiar una meta o agregar un workflow, edita solo esta tabla.
 WORKFLOWS = {
     "Auto Endorse": (36, 40),
@@ -37,17 +51,18 @@ WORKFLOWS = {
     "Places": (22, 25),
     "Speed Limit": (3, 3),
 }
+# ==============================================================
 
-# Valores por defecto si no se elige workflow
+# Metas por defecto si no se elige workflow
 META_HORA = 18   # mínimo
 IDEAL_HORA = 20  # ideal
-COMIDA_DEFAULT_MIN = 60
 
-# Palabras que indican comida, tareas y horas
-KW_COMIDA = r"(?:comida|com[ií]|comer|lunch|almuerzo|almorc[eé])"
+# Palabras que se reconocen en la frase
 KW_TAREAS = r"(?:tareas?|tasks?|edits?|ediciones?|edici[oó]n)"
 KW_HORAS = r"(?:h|hr|hrs|horas?|hours?)"
 NUM = r"(\d+(?:[.,]\d+)?(?::\d{1,2})?)"
+
+LINEA = "─" * 44
 
 
 # ---------------------------------------------------------------------------
@@ -79,77 +94,37 @@ def bonito(x):
     return str(int(v)) if v == int(v) else f"{v:.2f}".rstrip("0").rstrip(".")
 
 
-def con_signo(d):
-    if d == 0:
-        return "0 tareas"
-    return f"{'+' if d > 0 else ''}{bonito(d)} tareas"
+def exacto(x):
+    """Número sin redondear para mostrar la operación: 15.8333…, 108, 0.5."""
+    if abs(x - round(x)) < 1e-9:
+        return str(int(round(x)))
+    corto = f"{x:.4f}"
+    if abs(float(corto) - x) > 1e-9:
+        return corto + "…"              # tiene más decimales
+    return corto.rstrip("0").rstrip(".")
 
 
-def minutos_a_texto(minutos):
-    if minutos == 0:
-        return "sin comida"
-    h, m = divmod(round(minutos), 60)
-    partes = []
-    if h:
-        partes.append(f"{h} h")
-    if m:
-        partes.append(f"{m} min")
-    return " ".join(partes)
+def redondeo(x, texto):
+    """' → 87.96' solo cuando el redondeo cambia el número."""
+    return f" → {texto}" if abs(x - round(x, 2)) > 1e-9 else ""
+
+
+def falto_sobro(d):
+    """Explica una diferencia en palabras."""
+    if d < 0:
+        return f"te faltaron {bonito(-d)} tareas"
+    if d > 0:
+        return f"hiciste {bonito(d)} tareas de más"
+    return "lo cumpliste exacto"
 
 
 # ---------------------------------------------------------------------------
-# Lenguaje natural
+# Lectura de la frase
 # ---------------------------------------------------------------------------
-def leer_comida(s):
-    """Busca el tiempo de comida en la frase. Devuelve (minutos, texto_encontrado) o None."""
-    sin = re.search(rf"sin\s+{KW_COMIDA}|no\s+com[ií]", s)
-    if sin:
-        return 0, sin.group(0)
-
-    tiempo = (
-        r"(hora\s+y\s+media|media\s+hora|una\s+hora"
-        r"|\d+\s*(?:h|hr|hrs|horas?)\s*(?:y\s*)?\d+\s*(?:min|minutos|mins|m)?"
-        r"|\d+:\d{1,2}"
-        r"|\d+(?:[.,]\d+)?\s*(?:min|minutos|mins|m\b|h\b|hr|hrs|horas?)?)"
-    )
-    m = re.search(rf"{KW_COMIDA}\s*(?:de|:|por|durante)?\s*{tiempo}", s) or re.search(
-        rf"{tiempo}\s*(?:de\s*)?{KW_COMIDA}", s
-    )
-    if not m:
-        return None
-
-    t = m.group(1).strip()
-    if re.search(r"hora\s+y\s+media", t):
-        minutos = 90
-    elif re.search(r"media\s+hora", t):
-        minutos = 30
-    elif re.search(r"una\s+hora", t):
-        minutos = 60
-    elif x := re.match(r"(\d+)\s*(?:h|hr|hrs|horas?)\s*(?:y\s*)?(\d+)", t):
-        minutos = int(x.group(1)) * 60 + int(x.group(2))
-    elif x := re.fullmatch(r"(\d+):(\d{1,2})", t):
-        minutos = int(x.group(1)) * 60 + int(x.group(2))
-    elif x := re.fullmatch(r"(\d+(?:[.,]\d+)?)\s*(?:min|minutos|mins|m)", t):
-        minutos = a_numero(x.group(1))
-    elif x := re.fullmatch(r"(\d+(?:[.,]\d+)?)\s*(?:h|hr|hrs|horas?)", t):
-        minutos = a_numero(x.group(1)) * 60
-    else:
-        v = a_numero(t)
-        if v is None:
-            return None
-        minutos = v if v >= 10 else v * 60  # número suelto: 10 o más = minutos
-    return round(minutos), m.group(0)
-
-
 def leer_frase(frase):
-    """Extrae tareas, horas y comida (en minutos) de una frase libre."""
+    """Extrae tareas y horas de una frase libre, por ejemplo '95 tareas en 6 horas'."""
     s = frase.lower()
-    resultado = {"tareas": None, "horas": None, "comida_min": None}
-
-    comida = leer_comida(s)
-    if comida:
-        resultado["comida_min"] = comida[0]
-        s = s.replace(comida[1], " ")  # para no confundir la comida con las horas
+    resultado = {"tareas": None, "horas": None}
 
     if m := re.search(rf"{NUM}\s*{KW_TAREAS}", s):
         resultado["tareas"] = a_numero(m.group(1))
@@ -158,7 +133,7 @@ def leer_frase(frase):
     elif m := re.search(r"\d+:\d{1,2}", s):
         resultado["horas"] = a_numero(m.group(0))
 
-    # Respaldo: "142 en 9" -> primer número = tareas, segundo = horas
+    # Respaldo: "95 en 6" -> primer número = tareas, segundo = horas
     if resultado["tareas"] is None or resultado["horas"] is None:
         numeros = [a_numero(n) for n in re.findall(r"\d+(?:[.,]\d+)?(?::\d{1,2})?", s)]
         resto = [n for n in numeros if n not in (resultado["tareas"], resultado["horas"])]
@@ -179,106 +154,124 @@ def metas_de(workflow=None):
     return META_HORA, IDEAL_HORA
 
 
-def calcular(tareas, horas, modo="ts", comida_min=COMIDA_DEFAULT_MIN, workflow=None):
+def calcular(tareas, horas, workflow=None):
     """
-    modo 'ts' = horas registradas en Timesheet (se resta la comida)
-    modo 'pd' = horas productivas directas (no se resta nada)
-    workflow  = nombre de la tabla WORKFLOWS (define las metas por hora)
-    Si tareas es None, solo muestra las tareas esperadas para esas horas.
+    tareas   = tareas hechas (None = solo planeación: cuántas tareas se esperan)
+    horas    = horas productivas
+    workflow = nombre de la tabla WORKFLOWS (define la métrica planeada e ideal)
+
+    Métrica actual = tareas ÷ horas
+    MPI            = métrica actual ÷ métrica planeada
+      1  = exactamente en la métrica planeada
+      >1 = arriba de la métrica planeada
+      <1 = debajo de la métrica planeada
     Devuelve el texto del resultado.
     """
-    meta_h, ideal_h = metas_de(workflow)
-    comida_h = comida_min / 60 if modo == "ts" else 0
-    productivas = horas - comida_h
-    if productivas <= 0:
+    if horas is None or horas <= 0:
         raise ValueError("Las horas productivas deben ser mayores a 0.")
-
-    meta = productivas * meta_h
-    meta_ideal = productivas * ideal_h
+    planeada, ideal = metas_de(workflow)
+    h = bonito(horas)
+    tareas_plan = horas * planeada
+    tareas_ideal = horas * ideal
 
     lineas = []
     if workflow:
-        lineas += [f"Workflow: {workflow}", ""]
-    if tareas is not None:
-        lineas.append(f"Tareas realizadas: {bonito(tareas)}")
-    if modo == "ts":
-        lineas += [
-            f"Horas registradas: {bonito(horas)}",
-            f"Horas de comida: {bonito(comida_h)} ({minutos_a_texto(comida_min)})",
-        ]
-    lineas += [
-        f"Horas productivas: {bonito(productivas)}",
-        "",
-        f"Meta mínima ({bonito(meta_h)}/h): {bonito(meta)} tareas",
-        f"Meta ideal ({bonito(ideal_h)}/h): {bonito(meta_ideal)} tareas",
-    ]
+        lineas += [f"Workflow: {workflow}  (métricas {PERIODO_METAS})", ""]
+
+    ops = ["", LINEA, "CÓMO SE CALCULÓ"]
+
+    # ---------- Solo planeación (sin tareas) ----------
     if tareas is None:
-        return "\n".join(lineas)
+        lineas += [
+            "TUS DATOS",
+            f"Horas productivas: {h}",
+            "",
+            "TU MÉTRICA",
+            f"Métrica planeada: {bonito(planeada)} tareas por hora",
+            f"Métrica ideal:    {bonito(ideal)} tareas por hora",
+            "",
+            f"PLANEACIÓN PARA {h} HORAS",
+            f"Para un MPI de 1 (métrica planeada): {bonito(tareas_plan)} tareas",
+            f"Para la métrica ideal:               {bonito(tareas_ideal)} tareas",
+            "",
+            "Escribe tus tareas hechas para ver tu MPI.",
+        ]
+        ops += [
+            f"Tareas para MPI 1 = {exacto(horas)} horas × {exacto(planeada)} = {exacto(tareas_plan)}",
+            f"Tareas para ideal = {exacto(horas)} horas × {exacto(ideal)} = {exacto(tareas_ideal)}",
+        ]
+        return "\n".join(lineas + ops)
 
-    valor = tareas / meta
-    pct = redondear(valor * 100)
-    pct_ideal = redondear(tareas / meta_ideal * 100)
-    diff = redondear(tareas - meta)
-    diff_ideal = redondear(tareas - meta_ideal)
+    # ---------- Cálculo del MPI ----------
+    actual = tareas / horas                 # métrica actual
+    mpi_exacto = actual / planeada
+    mpi = redondear(mpi_exacto)
+    mpi_ideal_exacto = actual / ideal
+    mpi_ideal = redondear(mpi_ideal_exacto)
+    dif_plan = redondear(tareas - tareas_plan)
+    dif_ideal = redondear(tareas - tareas_ideal)
 
-    if diff_ideal >= 0:
-        estado = "[OK] Meta ideal alcanzada" if diff_ideal == 0 else \
-                 f"[OK] Superaste la meta ideal por {bonito(diff_ideal)} tareas"
-    elif diff >= 0:
-        base = "Mínimo alcanzado" if diff == 0 else f"Mínimo superado por {bonito(diff)}"
-        estado = f"[MEDIO] {base} · faltan {bonito(-diff_ideal)} para el ideal"
+    if mpi > 1:
+        posicion = "Estás ARRIBA de la métrica planeada."
+    elif mpi == 1:
+        posicion = "Estás EXACTAMENTE en la métrica planeada."
     else:
-        estado = f"[X] Faltaron {bonito(-diff)} tareas para el mínimo"
+        posicion = "Estás DEBAJO de la métrica planeada."
 
     lineas += [
+        "TUS DATOS",
+        f"Tareas hechas: {bonito(tareas)}",
+        f"Horas productivas: {h}",
         "",
-        f"Productividad: {pct:.2f}%",
-        f"Valor para captura: {redondear(valor):.2f}",
+        "TU MÉTRICA (tareas por hora)",
+        f"Métrica actual:   {bonito(actual)}   ← la tuya ({bonito(tareas)} ÷ {h})",
+        f"Métrica planeada: {bonito(planeada)}",
+        f"Métrica ideal:    {bonito(ideal)}",
         "",
-        f"Diferencia contra meta mínima: {con_signo(diff)}",
-        f"Diferencia contra meta ideal: {con_signo(diff_ideal)} ({pct_ideal:.2f}% del ideal)",
+        "TU MPI",
+        f"MPI: {mpi:.2f}   ← este es el que se reporta",
+        "  (1 = en la planeada · más de 1 = arriba · menos de 1 = debajo)",
+        f"  {posicion}",
+        f"MPI contra la métrica ideal: {mpi_ideal:.2f}",
         "",
-        estado,
+        f"TAREAS EN {h} HORAS",
+        f"Para un MPI de 1: {bonito(tareas_plan)} tareas → {falto_sobro(dif_plan)}",
+        f"Para el ideal:    {bonito(tareas_ideal)} tareas → {falto_sobro(dif_ideal)}",
+        "",
     ]
-    return "\n".join(lineas)
+
+    if mpi_ideal >= 1:
+        lineas.append("✅ Estás en la métrica ideal o arriba.")
+    elif mpi >= 1:
+        lineas.append("🟡 Cumpliste la métrica planeada, pero no la ideal.")
+    else:
+        lineas.append("❌ Estás debajo de la métrica planeada.")
+
+    ops += [
+        f"Métrica actual = {exacto(tareas)} tareas ÷ {exacto(horas)} horas = {exacto(actual)}"
+        + redondeo(actual, bonito(actual)),
+        f"MPI            = {exacto(actual)} ÷ {exacto(planeada)} = {exacto(mpi_exacto)}"
+        + redondeo(mpi_exacto, f"{mpi:.2f}"),
+        f"MPI ideal      = {exacto(actual)} ÷ {exacto(ideal)} = {exacto(mpi_ideal_exacto)}"
+        + redondeo(mpi_ideal_exacto, f"{mpi_ideal:.2f}"),
+        f"Tareas MPI 1   = {exacto(horas)} horas × {exacto(planeada)} = {exacto(tareas_plan)}",
+        f"Tareas ideal   = {exacto(horas)} horas × {exacto(ideal)} = {exacto(tareas_ideal)}",
+        f"Dif. MPI 1     = {exacto(tareas)} − {exacto(tareas_plan)} = {exacto(tareas - tareas_plan)}",
+        f"Dif. ideal     = {exacto(tareas)} − {exacto(tareas_ideal)} = {exacto(tareas - tareas_ideal)}",
+        "(→ = número redondeado a 2 decimales)",
+    ]
+    return "\n".join(lineas + ops)
 
 
 # ---------------------------------------------------------------------------
 # Interfaz de consola
 # ---------------------------------------------------------------------------
-def preguntar_numero(mensaje, default=None):
+def preguntar_numero(mensaje):
     while True:
-        r = input(mensaje).strip()
-        if r == "" and default is not None:
-            return default
-        v = a_numero(r)
+        v = a_numero(input(mensaje).strip())
         if v is not None and v >= 0:
             return v
         print("  Valor no válido, intenta de nuevo.")
-
-
-def preguntar_modo():
-    print("¿Qué horas vas a usar?")
-    print("  1) Horas registradas (Timesheet)  -> se resta la comida")
-    print("  2) Horas productivas directas     -> no se resta nada")
-    while True:
-        r = input("Opción [1]: ").strip()
-        if r in ("", "1"):
-            return "ts"
-        if r == "2":
-            return "pd"
-        print("  Escribe 1 o 2.")
-
-
-def preguntar_comida():
-    r = input("Tiempo de comida (ej: 1h, 45 min, 1:15) [1 h]: ").strip().lower()
-    if r == "":
-        return COMIDA_DEFAULT_MIN
-    encontrado = leer_comida("comida " + r)
-    if encontrado:
-        return encontrado[0]
-    print("  No entendí, uso 1 h.")
-    return COMIDA_DEFAULT_MIN
 
 
 def preguntar_workflow():
@@ -296,25 +289,16 @@ def preguntar_workflow():
 
 def una_vuelta(frase=None):
     workflow = preguntar_workflow()
-    print()
-    modo = preguntar_modo()
     if frase is None:
-        frase = input("\nEscribe tu frase (ej: 'Hice 142 tareas en 9 horas, comí 45 min')\n"
+        frase = input("\nEscribe tu frase (ej: '95 tareas en 6 horas')\n"
                       "o deja vacío para capturar dato por dato: ").strip()
-    datos = leer_frase(frase) if frase else {"tareas": None, "horas": None, "comida_min": None}
-
+    datos = leer_frase(frase) if frase else {"tareas": None, "horas": None}
     if datos["tareas"] is None:
-        datos["tareas"] = preguntar_numero("Tareas realizadas: ")
-    etiqueta = "Horas registradas" if modo == "ts" else "Horas productivas"
+        datos["tareas"] = preguntar_numero("Tareas hechas: ")
     if datos["horas"] is None:
-        datos["horas"] = preguntar_numero(f"{etiqueta} (ej: 9 o 8:45): ")
-    if modo == "ts" and datos["comida_min"] is None:
-        datos["comida_min"] = preguntar_comida()
-
+        datos["horas"] = preguntar_numero("Horas productivas (ej: 6 o 6:30): ")
     try:
-        texto = calcular(datos["tareas"], datos["horas"], modo,
-                         datos["comida_min"] if datos["comida_min"] is not None else COMIDA_DEFAULT_MIN,
-                         workflow)
+        texto = calcular(datos["tareas"], datos["horas"], workflow)
     except ValueError as e:
         print(f"\nERROR: {e}")
         return
@@ -324,7 +308,7 @@ def una_vuelta(frase=None):
 
 
 def main():
-    print("=== Calculadora MDI ===\n")
+    print(f"=== Calculadora MPI (metas {PERIODO_METAS}) ===\n")
     if len(sys.argv) > 1:  # frase pasada como argumento
         una_vuelta(" ".join(sys.argv[1:]))
         return

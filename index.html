@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Calculadora MDI</title>
+<title>Calculadora MPI</title>
 <style>
   /* Imita una ventana de Windows (tkinter) */
   body { background:#dcdcdc; margin:0; padding:20px; font:13px "Segoe UI", Tahoma, Arial, sans-serif; color:#000; }
@@ -24,7 +24,7 @@
   button { font:12px "Segoe UI", Arial, sans-serif; background:#f0f0f0; border:1px solid #adadad; padding:3px 6px; cursor:pointer; }
   button:hover { background:#e5f1fb; border-color:#0078d7; }
   button:active { background:#cce4f7; }
-  textarea { display:block; width:100%; box-sizing:border-box; height:300px; margin:12px 0 8px; font:14px "Courier New", Courier, monospace;
+  textarea { display:block; width:100%; box-sizing:border-box; height:600px; margin:12px 0 8px; font:14px "Courier New", Courier, monospace;
              border:1px solid #828790; background:#fff; resize:vertical; padding:4px; }
   .espacio td { height:12px; }
   #cargando { color:#555; font-style:italic; }
@@ -32,9 +32,9 @@
 </head>
 <body>
 <div class="ventana">
-  <div class="barra"><span>🪶 Calculadora MDI</span><span class="ctrl"><i>—</i><i>☐</i><i>✕</i></span></div>
+  <div class="barra"><span>🪶 Calculadora MPI</span><span class="ctrl"><i>—</i><i>☐</i><i>✕</i></span></div>
   <div class="contenido">
-    <h1>Calculadora MDI</h1>
+    <h1>Calculadora MPI</h1>
     <span id="metasTxt">Elige tu workflow.</span>
 
     <table>
@@ -47,10 +47,10 @@
         <td class="et">Frase:</td>
         <td><input type="text" id="frase" size="38"></td>
       </tr>
-      <tr><td></td><td><small>(ej: Hice 142 tareas en 9 horas)</small></td></tr>
+      <tr><td></td><td><small>(ej: 95 tareas en 6 horas)</small></td></tr>
       <tr class="espacio"><td colspan="2"></td></tr>
       <tr>
-        <td class="et">Tareas:</td>
+        <td class="et">Tareas hechas:</td>
         <td><input type="text" id="tareas" size="8"></td>
       </tr>
       <tr>
@@ -63,7 +63,7 @@
     <span id="cargando">Cargando Python…</span>
 
     <textarea id="resultado" readonly></textarea>
-    <button type="button" id="copiarTodo">Copiar resultado</button><button type="button" id="copiarValor">Copiar valor</button>
+    <button type="button" id="copiarTodo">Copiar resultado</button><button type="button" id="copiarValor">Copiar MPI</button>
     <span id="msg"></span>
   </div>
 </div>
@@ -91,7 +91,6 @@ async function iniciar(){
   }
 }
 
-const modo = () => 'pd';  // solo horas productivas directas
 
 function aNumero(s){
   if (!py) return null;
@@ -106,11 +105,11 @@ function calcularYMostrar(){
   const tareas = aNumero($('tareas').value);
   const horas = aNumero($('horas').value);
   const wf = $('workflow').value;
-  if (!wf){ mostrar('Elige un workflow.'); return; }
-  if (horas === null){ mostrar('Escribe las horas productivas para ver las tareas esperadas.'); return; }
+  if (!wf){ mostrar('Primero elige tu workflow.'); return; }
+  if (horas === null){ mostrar('Escribe tus horas productivas.\n\nTip: si solo pones las horas, te digo cuántas tareas necesitas para un MPI de 1.'); return; }
   try {
     // Sin tareas: solo muestra cuántas tareas se esperan en esas horas
-    mostrar(py.calcular(tareas, horas, modo(), 60, wf));
+    mostrar(py.calcular(tareas, horas, wf));
   } catch (e) {
     const linea = String(e.message).trim().split('\n').pop();
     mostrar('ERROR: ' + linea.replace(/^ValueError:\s*/, ''));
@@ -140,9 +139,10 @@ function llenarWorkflows(){
 
 function actualizarMetas(){
   const o = $('workflow').selectedOptions[0];
+  const periodo = py ? py.PERIODO_METAS : '';
   $('metasTxt').textContent = o && o.value
-    ? `Mínimo: ${o.dataset.m} tareas/hora. Ideal: ${o.dataset.t} tareas/hora.`
-    : 'Elige tu workflow.';
+    ? `Métrica planeada: ${o.dataset.m} tareas/hora. Ideal: ${o.dataset.t} tareas/hora. (Métricas ${periodo})`
+    : `Elige tu workflow. (Métricas ${periodo})`;
 }
 
 // Eventos
@@ -163,7 +163,7 @@ async function copiar(texto){
 }
 $('copiarTodo').onclick = () => copiar($('resultado').value.trim());
 $('copiarValor').onclick = () => {
-  const l = $('resultado').value.split('\n').find(x => x.startsWith('Valor para captura:'));
+  const l = $('resultado').value.split('\n').find(x => x.startsWith('MPI:'));
   if (l) copiar(l.split(': ')[1]);
 };
 
